@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# 앱이 생성한 보고서 (재생성 가능하므로 커밋 제외)
+reports/*.html
+
+# 로컬 비밀값 / 설정
+.env
+*.local
+
+# OS / 에디터
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Claude Code 로컬 설정 (머신 전용)
+.claude/settings.local.json

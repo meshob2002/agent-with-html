@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OK Agent × HTML 보고서</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">🟢 OK Agent <span>× HTML 보고서</span></div>
+  <button id="cfgToggle" class="ghost">⚙️ 설정</button>
+</header>
+
+<!-- 설정 패널 -->
+<section id="cfgPanel" class="panel hidden">
+  <div class="grid">
+    <label>BASE_URL
+      <input id="base_url" type="text" value="{{ default_base_url }}" placeholder="https://aip-admin.oksavingsbank.com">
+    </label>
+    <label>APP_ID (Global ID)
+      <input id="app_id" type="text" value="{{ default_app_id }}" placeholder="TExNQXBwOjZh...">
+    </label>
+    <label>API Key (Bearer)
+      <input id="token" type="password" placeholder="{{ '환경변수에서 로드됨 (비우면 사용)' if has_token else 'Authorization: Bearer <KEY>' }}">
+    </label>
+    <label>Project Key (PROJ-KEY)
+      <input id="project_key" type="password" placeholder="{{ '환경변수에서 로드됨 (비우면 사용)' if has_project_key else 'PROJ-KEY 헤더값' }}">
+    </label>
+  </div>
+  <details>
+    <summary>고급: 요청 헤더 직접 지정 (JSON)</summary>
+    <textarea id="headers_json" rows="3" placeholder='{"Authorization":"...","PROJ-KEY":"..."}'></textarea>
+  </details>
+  <p class="hint">설정은 브라우저(localStorage)에만 저장되며 서버에는 매 요청 시에만 전달됩니다. self-signed 인증서라 <code>verify=False</code> 로 호출합니다.</p>
+</section>
+
+<main class="layout">
+  <!-- 왼쪽: 대화/제어 -->
+  <div class="col left">
+    <div class="askbox">
+      <textarea id="query" rows="3" placeholder="예) 2024년 3분기 신용대출 실행 내역을 CSV로 추출해줘"></textarea>
+      <div class="row">
+        <button id="runBtn" class="primary">▶ 실행 (쿼리 → 링크 → 분석)</button>
+        <label class="chk"><input id="autoAnalyze" type="checkbox" checked> CSV 링크 자동 분석</label>
+      </div>
+      <div class="uploadline">
+        <span>또는 직접 CSV 분석:</span>
+        <input id="fileInput" type="file" accept=".csv,text/csv">
+      </div>
+    </div>
+
+    <div id="log" class="log"></div>
+  </div>
+
+  <!-- 오른쪽: 보고서 미리보기 -->
+  <div class="col right">
+    <div class="report-head">
+      <strong>📊 보고서 미리보기</strong>
+      <span id="reportActions" class="hidden">
+        <a id="openReport" target="_blank" rel="noopener">↗ 새 탭</a>
+        <a id="dlReport" download>⬇ 다운로드</a>
+      </span>
+    </div>
+    <iframe id="reportFrame" title="보고서" class="report-frame hidden"></iframe>
+    <div id="reportEmpty" class="report-empty">아직 생성된 보고서가 없습니다.<br>쿼리를 실행하거나 CSV를 업로드하세요.</div>
+  </div>
+</main>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
