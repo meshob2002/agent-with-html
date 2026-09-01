@@ -9,7 +9,14 @@
 <body>
 <header class="topbar">
   <div class="brand">🟢 OK Agent <span>× HTML 보고서</span></div>
-  <button id="cfgToggle" class="ghost">⚙️ 설정</button>
+  <div class="topright">
+    {% if echarts_name %}
+      <span class="chip ok" title="{{ echarts_name }} 감지됨">📈 ECharts 대시보드</span>
+    {% else %}
+      <span class="chip" title="app.py 옆에 echarts.min.js 를 두면 대시보드 모드">📊 기본 차트(CSS)</span>
+    {% endif %}
+    <button id="cfgToggle" class="ghost">⚙️ 설정</button>
+  </div>
 </header>
 
 <!-- 설정 패널 -->

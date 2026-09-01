@@ -30,7 +30,7 @@ from flask import (Flask, jsonify, render_template, request,
 
 from agent_client import AgentClient
 from analyzer import (analyze_dataframe, build_report_html, download_csv,
-                      extract_links, read_csv_bytes)
+                      extract_links, find_echarts, read_csv_bytes)
 
 # ----------------------------------------------------------------------
 # 설정 기본값 (환경변수로 지정 가능 — 원본 프로젝트와 동일한 이름 사용)
@@ -40,8 +40,13 @@ DEFAULT_APP_ID = os.environ.get("AGENT_APP_ID", "")
 DEFAULT_TOKEN = os.environ.get("AGENT_API_TOKEN", "")
 DEFAULT_PROJECT_KEY = os.environ.get("AGENT_PROJECT_KEY", "")
 
-REPORTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reports")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+REPORTS_DIR = os.path.join(BASE_DIR, "reports")
 os.makedirs(REPORTS_DIR, exist_ok=True)
+
+# ECharts 로컬 파일 탐지: 시작 파일(app.py)과 같은 위치를 최우선, static/ 도 확인.
+# 파일이 있으면 대시보드를 ECharts 로, 없으면 CSS 막대로 폴백한다.
+ECHARTS_PATH = find_echarts(BASE_DIR, os.path.join(BASE_DIR, "static"))
 
 app = Flask(__name__)
 
@@ -101,6 +106,7 @@ def index():
         default_app_id=DEFAULT_APP_ID,
         has_token=bool(DEFAULT_TOKEN),
         has_project_key=bool(DEFAULT_PROJECT_KEY),
+        echarts_name=(os.path.basename(ECHARTS_PATH) if ECHARTS_PATH else ""),
     )
 
 
@@ -181,13 +187,16 @@ def api_upload():
 def _build_and_respond(df, source, query, encoding, nbytes):
     analysis = analyze_dataframe(df)
     title = "OK Agent 데이터 분석 보고서"
-    html_text = build_report_html(analysis, title=title, source=source, query=query)
+    # echarts 파일이 있으면 보고서에 인라인 삽입 -> 저장/공유해도 오프라인 단독 실행
+    html_text = build_report_html(analysis, title=title, source=source, query=query,
+                                  echarts_path=ECHARTS_PATH)
     report_id = save_report(html_text)
     return jsonify({
         "report_id": report_id,
         "report_url": f"/reports/{report_id}.html",
         "encoding": encoding,
         "bytes": nbytes,
+        "renderer": "echarts" if ECHARTS_PATH else "css",
         "meta": analysis["meta"],
         "columns": analysis["columns"],
     })
@@ -198,7 +207,21 @@ def get_report(name):
     return send_from_directory(REPORTS_DIR, name)
 
 
+@app.route("/vendor/echarts.min.js")
+def vendor_echarts():
+    """탐지된 로컬 echarts 파일을 서빙 (보고서 미리보기용 참조 경로)."""
+    if not ECHARTS_PATH:
+        return ("echarts.min.js 를 찾을 수 없습니다. app.py 와 같은 위치에 두세요.", 404)
+    directory, name = os.path.split(ECHARTS_PATH)
+    return send_from_directory(directory, name, mimetype="application/javascript")
+
+
 if __name__ == "__main__":
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
+    if ECHARTS_PATH:
+        print(f"[echarts] 로컬 파일 사용: {ECHARTS_PATH}  -> ECharts 대시보드 모드")
+    else:
+        print("[echarts] 파일 없음 (app.py 옆에 echarts.min.js 를 두면 대시보드 모드). "
+              "지금은 CSS 막대 폴백으로 동작합니다.")
     app.run(host=host, port=port, debug=bool(os.environ.get("DEBUG")))
