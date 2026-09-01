@@ -37,7 +37,7 @@ class Orchestrator:
         self.conv = {"router": None, "analysis": None, "sql": None, "html": None}
         self.state = {
             "has_csv": False, "need_sql": False,
-            "analysis_done": False, "sql_done": False, "html_done": False,
+            "analysis_done": False, "sql_done": False, "sql_csv_ok": False, "html_done": False,
             "analysis_text": "", "sql_text": "", "html": None,
         }
 
@@ -49,7 +49,8 @@ class Orchestrator:
         s = self.state
         return (
             f"has_csv={s['has_csv']} need_sql={s['need_sql']} "
-            f"sql_done={s['sql_done']} analysis_done={s['analysis_done']} html_done={s['html_done']}\n"
+            f"sql_done={s['sql_done']} sql_csv_ok={s['sql_csv_ok']} "
+            f"analysis_done={s['analysis_done']} html_done={s['html_done']}\n"
             f"[사용자 요청] {s.get('user_request', '')}\n"
             f"[SQL 결과 요약] {(s['sql_text'] or '')[:400]}\n"
             f"[분석 결과 요약] {(s['analysis_text'] or '')[:400]}"
@@ -128,12 +129,13 @@ class Orchestrator:
                 self.conv["sql"] = res["conversation_id"]
                 self.state["sql_text"] = res["text"]
                 self.state["sql_done"] = True
-                # SQL 결과 DataFrame 이 있으면 커널에 로드해 분석에서 사용
+                # 계약: SQL 결과는 CSV 다운로드 링크 → 내려받은 DataFrame 을 커널에 로드해 분석에 사용
                 if res["df"] is not None:
                     import os, tempfile
                     fd, p = tempfile.mkstemp(suffix=".csv"); os.close(fd)
                     res["df"].to_csv(p, index=False, encoding="utf-8-sig")
                     self.load_csv_into_kernel(p, encoding="utf-8-sig")
+                    self.state["sql_csv_ok"] = True
 
             elif action == "analysis":
                 task = self._analysis_task(user_request)

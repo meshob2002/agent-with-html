@@ -192,19 +192,28 @@ def run_sql(agent, request: str, conversation_id: Optional[str],
     links = extract_links(message, base_url=base_url)
 
     df = None
-    csv_path = None
+    csv_url = None
+    # 계약: SQL Agent 는 결과를 'CSV 다운로드 링크' 로 반환한다.
     csv_links = [l for l in links if l["is_csv"]]
     if csv_links:
+        csv_url = csv_links[0]["url"]
         try:
-            df, enc, _ = download_csv(csv_links[0]["url"], headers=download_headers, verify=False)
+            df, enc, nbytes = download_csv(csv_url, headers=download_headers, verify=False)
+            if on_step:
+                on_step({"agent": "sql", "kind": "result",
+                         "text": f"결과 CSV 다운로드 완료: {csv_url}\n({df.shape[0]}행 × {df.shape[1]}열, {enc}, {nbytes:,}B)",
+                         "data": {"has_df": True, "url": csv_url}})
         except Exception as e:
             if on_step:
-                on_step({"agent": "sql", "kind": "error", "text": f"CSV 다운로드 실패: {e}"})
+                on_step({"agent": "sql", "kind": "error",
+                         "text": f"CSV 다운로드 실패({csv_url}): {e}"})
+    else:
+        if on_step:
+            on_step({"agent": "sql", "kind": "error",
+                     "text": "SQL 응답에서 CSV 다운로드 링크를 찾지 못했습니다. "
+                             "(SQL Agent 는 결과 CSV 링크를 반환해야 합니다)\n" + message[:400]})
 
-    if on_step:
-        on_step({"agent": "sql", "kind": "result", "text": message,
-                 "data": {"has_df": df is not None, "links": len(links)}})
-    return {"text": message, "df": df, "csv_path": csv_path, "links": links,
+    return {"text": message, "df": df, "csv_url": csv_url, "links": links,
             "conversation_id": conversation_id}
 
 
@@ -296,10 +305,12 @@ class MockAgent:
         )
 
     def _sql(self, query: str) -> str:
+        # 계약: SQL Agent 는 쿼리를 직접 실행하고 '결과 CSV 다운로드 링크' 를 반환한다.
+        # (목 모드에서는 앱이 서빙하는 /mock/sql.csv 상대링크를 돌려줘 실제 다운로드 경로를 태운다)
         return (
-            "요청하신 쿼리를 실행했습니다. 결과 미리보기:\n\n"
-            "| 지점 | 건수 | 평균금액 |\n|---|---|---|\n"
-            "| 강남 | 120 | 4,150,000 |\n| 분당 | 98 | 3,880,000 |\n| 부산 | 75 | 4,020,000 |\n"
+            "요청하신 쿼리를 실행했습니다. 결과 파일:\n\n"
+            "[query_result.csv](mock/sql.csv)\n\n"
+            "행 수: 200 (미리보기는 파일 참조)"
         )
 
     def _html(self, query: str) -> str:

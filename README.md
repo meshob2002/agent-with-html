@@ -17,7 +17,7 @@ UI는 Streamlit 대신 **HTML + JavaScript + Python(Flask)** 로 새로 구성�
 |---|---|
 | ① 라우팅 Agent | 사용자 요청과 상태를 보고 다음 행동(analysis/sql/html/finish)을 JSON 으로 결정 |
 | ② 분석 Agent | 내부망 Jupyter 커널과 ` ```python ` 코드블록을 주고받으며 분석 (상태 유지 커널) |
-| ③ SQL 실행 Agent | SQL 쿼리를 **직접 실행**하고 결과(표/CSV 다운로드 링크)를 반환 |
+| ③ SQL 실행 Agent | SQL 쿼리를 **직접 실행**하고 결과를 **CSV 다운로드 링크**로 반환 (앱이 내려받아 커널에 로드) |
 | ④ HTML 생성 Agent | 분석 결과를 받아 **완성된 standalone HTML 보고서**를 생성 |
 
 ## 동작 흐름
@@ -75,7 +75,7 @@ agent-with-html/
 > - **라우터**: `{"action":"analysis|sql|html|finish","reason":...}` JSON 으로 응답
 > - **분석**: 코드가 필요하면 ` ```python ` 코드블록 하나로 응답, 실행결과를 받아 이어가고,
 >   완료 시 코드블록 없이 최종 답변 (커널에 업로드 데이터가 `df` 로 로드돼 있음)
-> - **SQL**: 쿼리를 직접 실행하고 결과(표 또는 CSV 다운로드 링크)를 응답
+> - **SQL**: 쿼리를 직접 실행하고 결과를 **CSV 다운로드 링크**로 응답 (앱이 링크를 추출·다운로드해 커널의 `df` 로 로드)
 > - **HTML**: 분석 결과로 완성된 standalone HTML 문서를 응답(``` ```html ``` 펜스 허용)
 
 ## 재사용한 핵심 계약 (agent_client.py)

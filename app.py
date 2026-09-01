@@ -304,10 +304,14 @@ def api_orchestrate():
         agents = build_agents(cfg["base_url"], headers, cfg["app_ids"], verify=False)
 
     dl_headers = {}
-    if not use_mock:
+    orch_base_url = cfg["base_url"]
+    if use_mock:
+        # 목 SQL 이 반환하는 상대 링크(mock/sql.csv)를 앱 자신에게서 내려받도록 origin 사용
+        orch_base_url = request.url_root
+    else:
         dl_headers = {k: v for k, v in build_headers(cfg).items() if k.lower() != "content-type"}
 
-    orch = Orchestrator(agents, get_kernel(), base_url=cfg["base_url"],
+    orch = Orchestrator(agents, get_kernel(), base_url=orch_base_url,
                         download_headers=dl_headers, use_router_llm=True)
     try:
         result = orch.run(user_request=req_text, csv_path=csv_path,
@@ -322,6 +326,23 @@ def api_orchestrate():
         report_url = f"/reports/{report_id}.html"
 
     return jsonify({"steps": result["steps"], "report_url": report_url, "mock": use_mock})
+
+
+@app.route("/mock/sql.csv")
+def mock_sql_csv():
+    """목 모드용 SQL 결과 CSV. (SQL Agent 가 반환하는 다운로드 링크의 목 대상)"""
+    import io
+    import random
+    random.seed(7)
+    branches = ["강남", "분당", "서초", "일산", "부산"]
+    products = ["신용대출", "주택담보", "예금", "적금"]
+    rows = ["지점,상품,건수,평균금액,연체율"]
+    for b in branches:
+        for p in products:
+            rows.append(f"{b},{p},{random.randint(20, 200)},"
+                        f"{random.randint(300, 900) * 10000},{round(random.uniform(0.01, 0.2), 3)}")
+    csv = "\n".join(rows)
+    return app.response_class(csv, mimetype="text/csv")
 
 
 @app.route("/reports/<path:name>")
