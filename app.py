@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 
 from flask import (Flask, jsonify, render_template, request,
@@ -36,9 +37,17 @@ from analyzer import (analyze_dataframe, build_report_html, download_csv,
 # 설정 기본값 (환경변수로 지정 가능 — 원본 프로젝트와 동일한 이름 사용)
 # ----------------------------------------------------------------------
 DEFAULT_BASE_URL = os.environ.get("AGENT_BASE_URL", "https://aip-admin.oksavingsbank.com")
-DEFAULT_APP_ID = os.environ.get("AGENT_APP_ID", "")
+DEFAULT_APP_ID = os.environ.get("AGENT_APP_ID", "")           # (레거시 단일 앱 경로용)
 DEFAULT_TOKEN = os.environ.get("AGENT_API_TOKEN", "")
 DEFAULT_PROJECT_KEY = os.environ.get("AGENT_PROJECT_KEY", "")
+
+# 멀티 에이전트: 4개 Agent API 의 app_id (각각 별도 배포)
+DEFAULT_APP_IDS = {
+    "router": os.environ.get("AGENT_ROUTER_APP_ID", ""),
+    "analysis": os.environ.get("AGENT_ANALYSIS_APP_ID", ""),
+    "sql": os.environ.get("AGENT_SQL_APP_ID", ""),
+    "html": os.environ.get("AGENT_HTML_APP_ID", ""),
+}
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 REPORTS_DIR = os.path.join(BASE_DIR, "reports")
@@ -47,6 +56,19 @@ os.makedirs(REPORTS_DIR, exist_ok=True)
 # ECharts 로컬 파일 탐지: 시작 파일(app.py)과 같은 위치를 최우선, static/ 도 확인.
 # 파일이 있으면 대시보드를 ECharts 로, 없으면 CSS 막대로 폴백한다.
 ECHARTS_PATH = find_echarts(BASE_DIR, os.path.join(BASE_DIR, "static"))
+
+# 상태 유지 Jupyter 커널(요청 간 재사용). 분석 에이전트가 사용.
+_KERNEL = None
+
+
+def get_kernel():
+    """상태 유지 커널을 지연 생성(요청 간 변수 유지). jupyter 미설치 시 명확한 에러."""
+    global _KERNEL
+    if _KERNEL is None:
+        from kernel_manager import JupyterKernelSession  # 지연 임포트
+        _KERNEL = JupyterKernelSession(kernel_name="python3")
+    return _KERNEL
+
 
 app = Flask(__name__)
 
@@ -77,9 +99,14 @@ def build_headers(cfg: dict) -> dict:
 
 def cfg_from_request(data: dict) -> dict:
     cfg = data.get("config") or {}
+    app_ids = cfg.get("app_ids") or {}
     return {
         "base_url": (cfg.get("base_url") or DEFAULT_BASE_URL).strip(),
         "app_id": (cfg.get("app_id") or DEFAULT_APP_ID).strip(),
+        "app_ids": {
+            role: (app_ids.get(role) or DEFAULT_APP_IDS[role]).strip()
+            for role in ("router", "analysis", "sql", "html")
+        },
         "token": cfg.get("token", ""),
         "project_key": cfg.get("project_key", ""),
         "headers_json": cfg.get("headers_json", ""),
@@ -104,6 +131,7 @@ def index():
         "index.html",
         default_base_url=DEFAULT_BASE_URL,
         default_app_id=DEFAULT_APP_ID,
+        default_app_ids=DEFAULT_APP_IDS,
         has_token=bool(DEFAULT_TOKEN),
         has_project_key=bool(DEFAULT_PROJECT_KEY),
         echarts_name=(os.path.basename(ECHARTS_PATH) if ECHARTS_PATH else ""),
@@ -200,6 +228,100 @@ def _build_and_respond(df, source, query, encoding, nbytes):
         "meta": analysis["meta"],
         "columns": analysis["columns"],
     })
+
+
+_ECHARTS_SRC_TAG_RE = re.compile(
+    r'<script[^>]*\ssrc=["\'][^"\']*echarts[^"\']*\.js["\'][^>]*>\s*</script>',
+    re.IGNORECASE)
+
+
+def inline_echarts_if_referenced(html_text: str) -> str:
+    """HTML Agent 가 만든 문서가 echarts 를 외부 참조하면, 로컬 파일 내용으로 인라인 치환.
+    (내부망/오프라인에서 보고서가 단독 실행되도록)"""
+    if not ECHARTS_PATH or not _ECHARTS_SRC_TAG_RE.search(html_text):
+        return html_text
+    try:
+        with open(ECHARTS_PATH, "r", encoding="utf-8") as f:
+            src = f.read()
+    except Exception:
+        return html_text
+    return _ECHARTS_SRC_TAG_RE.sub("<script>\n" + src + "\n</script>", html_text, count=1)
+
+
+@app.post("/api/orchestrate")
+def api_orchestrate():
+    """
+    멀티 에이전트 파이프라인 실행.
+    multipart/form-data:
+      - request   : 사용자 요청 텍스트 (선택)
+      - file      : CSV 업로드 (선택)
+      - need_sql  : "true"/"false" — SQL 실행 경로 필요 여부
+      - mock      : "true"/"false" — 사내망 없이 목 에이전트로 데모
+      - config    : JSON 문자열 (base_url, app_ids{router,analysis,sql,html}, token, project_key, headers_json)
+    """
+    from agents import build_agents, build_mock_agents
+    from orchestrator import Orchestrator
+
+    req_text = (request.form.get("request") or "").strip()
+    need_sql = (request.form.get("need_sql") or "false").lower() == "true"
+    use_mock = (request.form.get("mock") or "false").lower() == "true"
+    try:
+        cfg = cfg_from_request({"config": json.loads(request.form.get("config") or "{}")})
+    except json.JSONDecodeError as e:
+        return jsonify({"error": f"config JSON 파싱 실패: {e}"}), 400
+
+    # 업로드 CSV (선택) → 임시 파일로 저장해 커널에 로드
+    csv_path, encoding = None, "utf-8-sig"
+    f = request.files.get("file")
+    if f and f.filename:
+        raw = f.read()
+        try:
+            df, encoding = read_csv_bytes(raw, filename=f.filename)
+        except Exception as e:
+            return jsonify({"error": f"CSV 파싱 실패: {e}"}), 400
+        import tempfile
+        fd, csv_path = tempfile.mkstemp(suffix=".csv", dir=REPORTS_DIR)
+        os.close(fd)
+        df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+        encoding = "utf-8-sig"
+
+    if not req_text and not csv_path:
+        return jsonify({"error": "요청 텍스트나 CSV 파일 중 하나는 필요합니다."}), 400
+
+    # 에이전트 구성 (목 or 실제)
+    if use_mock:
+        agents = build_mock_agents()
+    else:
+        try:
+            headers = build_headers(cfg)
+        except json.JSONDecodeError as e:
+            return jsonify({"error": f"Headers JSON 파싱 실패: {e}"}), 400
+        need = ["router", "analysis", "html"] + (["sql"] if need_sql else [])
+        missing = [r for r in need if not cfg["app_ids"][r]]
+        if missing:
+            return jsonify({"error": f"다음 Agent app_id 가 없습니다: {', '.join(missing)} "
+                                     f"(설정에서 입력하거나 목 모드를 켜세요)"}), 400
+        agents = build_agents(cfg["base_url"], headers, cfg["app_ids"], verify=False)
+
+    dl_headers = {}
+    if not use_mock:
+        dl_headers = {k: v for k, v in build_headers(cfg).items() if k.lower() != "content-type"}
+
+    orch = Orchestrator(agents, get_kernel(), base_url=cfg["base_url"],
+                        download_headers=dl_headers, use_router_llm=True)
+    try:
+        result = orch.run(user_request=req_text, csv_path=csv_path,
+                          csv_encoding=encoding, need_sql=need_sql)
+    except Exception as e:
+        return jsonify({"error": f"오케스트레이션 실패: {e}", "steps": orch.steps}), 500
+
+    report_url = None
+    if result["html"]:
+        html_text = inline_echarts_if_referenced(result["html"])
+        report_id = save_report(html_text)
+        report_url = f"/reports/{report_id}.html"
+
+    return jsonify({"steps": result["steps"], "report_url": report_url, "mock": use_mock})
 
 
 @app.route("/reports/<path:name>")

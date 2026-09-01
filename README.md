@@ -1,35 +1,53 @@
-# OK Agent × HTML 데이터 분석 보고서
+# OK Agent 멀티에이전트 × HTML 보고서
 
-내부망 PC에서 **배포된 OK저축은행 Agent API**(프롬프트만 존재, LLM 다이렉트 콜 불가)에
-쿼리를 실행시켜 **결과 CSV 다운로드 링크**를 받고, 그 CSV를 내려받아 **pandas로 분석**한 뒤
-**자체 완결형(offline) HTML 보고서**를 생성하는 앱.
+내부망 PC에서 **배포된 OK저축은행 Agent API 4개**(라우팅/분석/SQL/HTML)를 오케스트레이션해
+데이터 분석과 HTML 보고서 생성을 자동화하는 앱. 분석 에이전트는 **내부망 Jupyter 커널**과
+코드블록을 주고받으며 결과를 만든다.
 
 기존 [agent-jupyter-bridge](https://github.com/meshob2002/agent-jupyter-bridge)의
-`agent_client.py`(Agent API 호출부)를 **그대로 재사용**하고, UI는 Streamlit 대신
-**HTML + JavaScript + Python(Flask)** 로 새로 구성했다.
+`agent_client.py`(Agent API 호출부)와 `kernel_manager.py`(Jupyter 커널)를 **그대로 재사용**하고,
+UI는 Streamlit 대신 **HTML + JavaScript + Python(Flask)** 로 새로 구성했다.
+
+## 4개 에이전트
+
+같은 BASE_URL·헤더에 **서로 다른 `app_id`** 로 호출한다. 라우터는 슈퍼바이저로,
+매 단계 현재 상태를 보고 다음에 실행할 에이전트를 정한다.
+
+| 에이전트 | 역할 |
+|---|---|
+| ① 라우팅 Agent | 사용자 요청과 상태를 보고 다음 행동(analysis/sql/html/finish)을 JSON 으로 결정 |
+| ② 분석 Agent | 내부망 Jupyter 커널과 ` ```python ` 코드블록을 주고받으며 분석 (상태 유지 커널) |
+| ③ SQL 실행 Agent | SQL 쿼리를 **직접 실행**하고 결과(표/CSV 다운로드 링크)를 반환 |
+| ④ HTML 생성 Agent | 분석 결과를 받아 **완성된 standalone HTML 보고서**를 생성 |
 
 ## 동작 흐름
 
 ```
-사용자 요청 (웹 UI)
-   │
-   ▼  POST /api/query
-Flask ──────(사용자 입력 그대로)──────▶ Agent API (AgentClient.run)
-   ▲                                      │
-   │                         응답 텍스트 + CSV 다운로드 링크
-   │                                      ▼
-   │                          extract_links() 로 링크 추출
-   ▼  POST /api/analyze
-CSV 다운로드(verify=False) → pandas 분석 → standalone HTML 보고서(reports/)
-   │
-   ▼
-UI 우측 iframe 미리보기 + 새 탭 / 다운로드
+                       ┌───────────── 라우팅 Agent (슈퍼바이저) ─────────────┐
+사용자 요청/CSV ──▶ Flask 오케스트레이터 ──(상태 요약)──▶ "다음 행동?" ──┐        │
+                       ▲                                                    ▼        │
+                       │   ┌──────────────┬──────────────┬─────────────────┐        │
+                       │   ▼ analysis      ▼ sql           ▼ html            │        │
+                       │ 분석 Agent      SQL Agent       HTML Agent          │        │
+                       │ ↕ Jupyter 커널   (직접 실행)      (완성 HTML)        │        │
+                       │   │  결과          │ 결과→분석      │ 보고서            │        │
+                       └───┴───────────────┴───────────────┴──────────(finish)┘
+                                                                         │
+                                                    reports/<id>.html ◀──┘  (UI iframe)
 ```
 
-- Agent 대화는 `conversationId` 로 상태 유지 (이어서 지시 가능)
-- CSV 링크가 CSV로 보이면(`.csv`/`download`/`export` 등) **자동 분석** 옵션 지원
-- Agent 없이도 테스트 가능: **로컬 CSV 업로드 분석**(`/api/upload`)
-- 보고서는 외부 CDN 없이 그려져 **오프라인·내부망에서도** 파일 하나로 열림
+- **CSV 업로드** → 커널에 `df` 로 로드 → 라우터가 `analysis` → 분석 → `html` → 보고서
+- **쿼리 요청**(SQL 실행 경로 ON) → 라우터가 `sql` → SQL Agent 직접 실행 →
+  (CSV 링크면 다운로드해 커널에 로드) → 분석 Agent → `html` → 보고서
+- 각 에이전트는 자체 `conversationId` 로 상태 유지
+- 라우터 응답이 없거나 파싱 실패하면 **규칙 기반 기본 계획**으로 폴백 (안전망)
+- HTML Agent 결과가 echarts 를 외부 참조하면 로컬 echarts 를 **인라인 치환**(오프라인 단독 실행)
+
+## 목 모드 (사내망 없이 개발/데모)
+
+4개 API·커널에 접속할 수 없어도 전체 흐름을 시연할 수 있다. UI 의 **목 모드** 체크(기본 ON) 또는
+`mock=true` 로 요청하면, 역할별 목 에이전트가 그럴듯한 응답을 돌려주고 **실제 Jupyter 커널이
+코드를 실행**한다. 사내망에서는 목 모드를 끄고 4개 `app_id` 를 설정한다.
 
 ## 차트 라이브러리 (ECharts, 내부망 파일)
 
@@ -52,9 +70,13 @@ agent-with-html/
 └── ...
 ```
 
-> **전제**: 코드 실행 루프 대신, "요청을 처리하고 **결과 CSV의 다운로드 링크를 응답에 포함**"
-> 하는 규칙이 외부 Agent 프롬프트에 등록돼 있다고 가정한다. 앱은 사용자 입력을 그대로 전달하고
-> 응답에서 링크만 추출한다.
+> **전제(외부 Agent 프롬프트 규약)**: 각 에이전트의 동작 규칙은 배포된 Agent 프롬프트에
+> 등록돼 있다고 가정한다. 앱은 그 규약에 맞춰 입출력을 파싱한다.
+> - **라우터**: `{"action":"analysis|sql|html|finish","reason":...}` JSON 으로 응답
+> - **분석**: 코드가 필요하면 ` ```python ` 코드블록 하나로 응답, 실행결과를 받아 이어가고,
+>   완료 시 코드블록 없이 최종 답변 (커널에 업로드 데이터가 `df` 로 로드돼 있음)
+> - **SQL**: 쿼리를 직접 실행하고 결과(표 또는 CSV 다운로드 링크)를 응답
+> - **HTML**: 분석 결과로 완성된 standalone HTML 문서를 응답(``` ```html ``` 펜스 허용)
 
 ## 재사용한 핵심 계약 (agent_client.py)
 
@@ -87,31 +109,40 @@ C:\Users\OK\miniconda3\python.exe app.py
 
 | 항목 | 환경변수 | 설명 |
 |---|---|---|
-| BASE_URL | `AGENT_BASE_URL` | 예: `https://aip-admin.oksavingsbank.com` |
-| APP_ID | `AGENT_APP_ID` | LLM 앱 Global ID (예: `TExNQXBwOjZh...`) |
-| API Key | `AGENT_API_TOKEN` | `Authorization: Bearer <key>` 로 전송 |
-| Project Key | `AGENT_PROJECT_KEY` | `PROJ-KEY: <key>` 헤더로 전송 |
+| BASE_URL (공통) | `AGENT_BASE_URL` | 예: `https://aip-admin.oksavingsbank.com` |
+| 라우팅 app_id | `AGENT_ROUTER_APP_ID` | ① 라우팅 Agent Global ID |
+| 분석 app_id | `AGENT_ANALYSIS_APP_ID` | ② 분석 Agent Global ID |
+| SQL app_id | `AGENT_SQL_APP_ID` | ③ SQL 실행 Agent Global ID |
+| HTML app_id | `AGENT_HTML_APP_ID` | ④ HTML 생성 Agent Global ID |
+| API Key | `AGENT_API_TOKEN` | `Authorization: Bearer <key>` 로 전송(공통) |
+| Project Key | `AGENT_PROJECT_KEY` | `PROJ-KEY: <key>` 헤더로 전송(공통) |
 
+- 4개 에이전트는 같은 BASE_URL·헤더에 **서로 다른 app_id** 로 호출된다.
 - Bearer 방식이 아니면 **고급: 요청 헤더 직접 지정(JSON)** 에 헤더 전체를 넣으면 그대로 사용된다.
 - UI에서 입력한 설정은 **브라우저 localStorage** 에만 저장되고, 서버에는 매 요청 시에만 전달된다.
+- (레거시 단일 앱 경로 `/api/query`·`/api/analyze` 는 `AGENT_APP_ID` 를 계속 사용한다.)
 
 ## API 엔드포인트
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
 | GET | `/` | 웹 UI |
-| POST | `/api/query` | Agent 호출 → `{message, conversation_id, links[]}` |
-| POST | `/api/analyze` | `{url}` CSV 다운로드·분석 → 보고서 생성 |
-| POST | `/api/upload` | 로컬 CSV 업로드 분석 (Agent 없이) |
+| POST | `/api/orchestrate` | **멀티에이전트 파이프라인**(라우터→분석/SQL→HTML). multipart: `request`, `file`(선택), `need_sql`, `mock`, `config` → `{steps[], report_url}` |
+| POST | `/api/upload` | 빠른 분석: 로컬 CSV 업로드 → pandas 분석 보고서 (에이전트 없이) |
+| POST | `/api/query` | (레거시) 단일 Agent 호출 → `{message, conversation_id, links[]}` |
+| POST | `/api/analyze` | (레거시) `{url}` CSV 다운로드·분석 → 보고서 |
 | GET | `/reports/<id>.html` | 생성된 보고서 파일 |
+| GET | `/vendor/echarts.min.js` | 탐지된 로컬 echarts 서빙 |
 
 ## 파일 구성
 
-- `app.py` — Flask 백엔드 (라우팅 + Agent 호출 + 다운로드/분석 오케스트레이션)
-- `agent_client.py` — **원본 재사용**. Agent API 호출, BOT 응답 파싱
-- `analyzer.py` — 링크 추출 · CSV 다운로드/파싱(한글 인코딩 자동) · pandas 분석 · HTML 보고서 생성
-- `templates/index.html` — 웹 UI
-- `static/style.css`, `static/app.js` — 프론트엔드 스타일 / 로직
+- `app.py` — Flask 백엔드 (라우팅 + 엔드포인트 + 커널 수명주기)
+- `agent_client.py` — **원본 재사용**. Agent API 호출, BOT 응답/코드블록 파싱
+- `kernel_manager.py` — **원본 재사용**. 상태 유지 Jupyter 커널(`JupyterKernelSession`)
+- `agents.py` — 4개 에이전트 클라이언트 묶음 · 각 에이전트 실행 로직 · 라우터 파싱 · 목 에이전트
+- `orchestrator.py` — 라우터(슈퍼바이저) 중심 파이프라인 제어 + 규칙 기반 폴백
+- `analyzer.py` — 링크 추출 · CSV 파싱(한글 인코딩 자동) · pandas 분석 · ECharts/CSS 보고서(빠른 분석용)
+- `templates/index.html` · `static/{style.css,app.js}` — 웹 UI
 - `reports/` — 생성된 보고서 저장 폴더 (기본 git 제외)
 
 ## 보고서에 담기는 내용

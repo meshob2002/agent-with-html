@@ -6,8 +6,9 @@ __pycache__/
 venv/
 env/
 
-# 앱이 생성한 보고서 (재생성 가능하므로 커밋 제외)
-reports/*.html
+# 앱이 생성한 보고서 / 임시 CSV (재생성 가능하므로 커밋 제외)
+reports/*
+!reports/.gitkeep
 
 # ECharts 라이브러리 (내부망에서 각자 배치 — 저장소에는 커밋하지 않음)
 echarts.min.js

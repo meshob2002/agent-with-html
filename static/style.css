@@ -60,6 +60,23 @@ code { background:var(--line); padding:1px 5px; border-radius:5px; }
 .msg.error .who { color:var(--danger); }
 .msg.status { color:var(--muted); font-style:italic; }
 
+/* 멀티에이전트 설정 그리드 */
+.agentgrid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px; margin-top:12px;
+  padding-top:12px; border-top:1px dashed var(--line); }
+.mini { font-size:12px; cursor:pointer; text-decoration:underline; margin-left:auto; }
+.badge { font-size:10px; padding:1px 6px; border-radius:20px; background:var(--brand); color:#fff; margin-left:4px; }
+.dim { color:var(--muted); font-size:12px; }
+
+/* 에이전트 스텝 */
+.msg.step { border-left-width:3px; }
+.msg.step.a-router   { border-left-color:#8e44ad; }
+.msg.step.a-analysis { border-left-color:var(--brand2); }
+.msg.step.a-sql      { border-left-color:#2980b9; }
+.msg.step.a-html     { border-left-color:#e08e0b; }
+.msg.step.a-kernel   { border-left-color:#7f8c8d; }
+.msg pre.exec { margin:0; font-size:12px; max-height:180px; overflow:auto; background:var(--bg);
+  padding:8px 10px; border-radius:8px; white-space:pre-wrap; word-break:break-word; }
+
 .links { margin-top:8px; display:flex; flex-direction:column; gap:6px; }
 .linkrow { display:flex; align-items:center; gap:8px; font-size:13px; }
 .linkrow .u { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
