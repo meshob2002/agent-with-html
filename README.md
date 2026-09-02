@@ -109,7 +109,7 @@ C:\Users\OK\miniconda3\python.exe app.py
 
 | 항목 | 환경변수 | 설명 |
 |---|---|---|
-| BASE_URL (공통) | `AGENT_BASE_URL` | 예: `https://aip-admin.oksavingsbank.com` |
+| BASE_URL (공통) | `AGENT_BASE_URL` | 예: `https://ok.com` |
 | 라우팅 app_id | `AGENT_ROUTER_APP_ID` | ① 라우팅 Agent Global ID |
 | 분석 app_id | `AGENT_ANALYSIS_APP_ID` | ② 분석 Agent Global ID |
 | SQL app_id | `AGENT_SQL_APP_ID` | ③ SQL 실행 Agent Global ID |
