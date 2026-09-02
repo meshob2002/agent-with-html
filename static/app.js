@@ -141,20 +141,47 @@
     fd.append("config", JSON.stringify(cfg));
     if (file) fd.append("file", file);
 
-    fetch("/api/orchestrate", { method: "POST", body: fd })
-      .then(function (r) { return r.json().then(function (j) {
-        if (!r.ok) { j.__status = r.status; } return j; }); })
-      .then(function (res) {
+    // NDJSON 스트리밍 수신: 한 줄에 이벤트 하나씩 도착하는 즉시 렌더
+    function handleEvent(obj) {
+      if (obj.type === "step") {
         st.remove();
-        (res.steps || []).forEach(renderStep);
-        if (res.error) { addMsg("error", "오류", esc(res.error)); return; }
-        if (res.report_url) {
-          var id = res.report_url.split("/").pop().replace(".html", "").slice(0, 8);
+        renderStep(obj.step);
+      } else if (obj.type === "done") {
+        if (obj.report_url) {
+          var id = obj.report_url.split("/").pop().replace(".html", "").slice(0, 8);
           addMsg("step a-html", "📄 완료", "HTML 보고서를 오른쪽에 표시했습니다.");
-          showReport(res.report_url, id);
+          showReport(obj.report_url, id);
         } else {
           addMsg("status", "안내", "보고서가 생성되지 않았습니다. 스텝 로그를 확인하세요.");
         }
+      } else if (obj.type === "error") {
+        addMsg("error", "오류", esc(obj.error));
+      }
+    }
+
+    fetch("/api/orchestrate", { method: "POST", body: fd })
+      .then(function (r) {
+        if (!r.ok || !r.body) {
+          return r.json().then(function (j) { throw new Error(j.error || ("HTTP " + r.status)); });
+        }
+        var reader = r.body.getReader();
+        var decoder = new TextDecoder();
+        var buffer = "";
+        function pump() {
+          return reader.read().then(function (res) {
+            buffer += decoder.decode(res.value || new Uint8Array(), { stream: !res.done });
+            var lines = buffer.split("\n");
+            buffer = res.done ? "" : lines.pop();  // 마지막 미완성 줄은 남겨둠
+            lines.forEach(function (line) {
+              line = line.trim();
+              if (!line) return;
+              try { handleEvent(JSON.parse(line)); }
+              catch (e) { /* 부분 수신 라인 무시 */ }
+            });
+            if (!res.done) return pump();
+          });
+        }
+        return pump();
       })
       .catch(function (e) { st.remove(); addMsg("error", "요청 실패", esc(e.message)); })
       .finally(function () { els.runBtn.disabled = false; });

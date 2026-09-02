@@ -245,7 +245,10 @@ def inline_echarts_if_referenced(html_text: str) -> str:
             src = f.read()
     except Exception:
         return html_text
-    return _ECHARTS_SRC_TAG_RE.sub("<script>\n" + src + "\n</script>", html_text, count=1)
+    # 치환을 '함수'로 준다: 문자열로 주면 echarts 소스 안의 \d, \1 등이
+    # re 치환 템플릿으로 해석돼 'bad escape' 에러가 난다.
+    replacement = "<script>\n" + src + "\n</script>"
+    return _ECHARTS_SRC_TAG_RE.sub(lambda _m: replacement, html_text, count=1)
 
 
 @app.post("/api/orchestrate")
@@ -311,21 +314,56 @@ def api_orchestrate():
     else:
         dl_headers = {k: v for k, v in build_headers(cfg).items() if k.lower() != "content-type"}
 
+    # ---- 스텝을 그때그때 흘려보내는 NDJSON 스트리밍 응답 ----
+    # 워커 스레드에서 오케스트레이터를 돌리고, on_step 콜백이 큐로 이벤트를 넘긴다.
+    import queue
+    import threading
+
+    q: "queue.Queue" = queue.Queue()
+    holder: dict = {}
+
     orch = Orchestrator(agents, get_kernel(), base_url=orch_base_url,
-                        download_headers=dl_headers, use_router_llm=True)
-    try:
-        result = orch.run(user_request=req_text, csv_path=csv_path,
-                          csv_encoding=encoding, need_sql=need_sql)
-    except Exception as e:
-        return jsonify({"error": f"오케스트레이션 실패: {e}", "steps": orch.steps}), 500
+                        download_headers=dl_headers, use_router_llm=True,
+                        on_step=lambda ev: q.put(ev))
 
-    report_url = None
-    if result["html"]:
-        html_text = inline_echarts_if_referenced(result["html"])
-        report_id = save_report(html_text)
-        report_url = f"/reports/{report_id}.html"
+    def worker():
+        try:
+            holder["result"] = orch.run(user_request=req_text, csv_path=csv_path,
+                                        csv_encoding=encoding, need_sql=need_sql)
+        except Exception as e:  # noqa: BLE001
+            holder["error"] = str(e)
+        finally:
+            q.put(None)  # 종료 신호
 
-    return jsonify({"steps": result["steps"], "report_url": report_url, "mock": use_mock})
+    def generate():
+        threading.Thread(target=worker, daemon=True).start()
+        while True:
+            ev = q.get()
+            if ev is None:
+                break
+            yield json.dumps({"type": "step", "step": ev}, ensure_ascii=False) + "\n"
+
+        if "error" in holder:
+            yield json.dumps({"type": "error", "error": holder["error"]}, ensure_ascii=False) + "\n"
+            return
+        result = holder.get("result", {})
+        report_url = None
+        if result.get("html"):
+            try:
+                html_text = inline_echarts_if_referenced(result["html"])
+                report_id = save_report(html_text)
+                report_url = f"/reports/{report_id}.html"
+            except Exception as e:  # noqa: BLE001
+                yield json.dumps({"type": "error", "error": f"보고서 저장 실패: {e}"},
+                                 ensure_ascii=False) + "\n"
+                return
+        yield json.dumps({"type": "done", "report_url": report_url, "mock": use_mock},
+                         ensure_ascii=False) + "\n"
+
+    resp = app.response_class(generate(), mimetype="application/x-ndjson")
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["X-Accel-Buffering"] = "no"  # 프록시 버퍼링 방지
+    return resp
 
 
 @app.route("/mock/sql.csv")

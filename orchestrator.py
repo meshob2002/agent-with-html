@@ -23,7 +23,8 @@ class Orchestrator:
     def __init__(self, agents: AgentSet, kernel, base_url: str = "",
                  download_headers: Optional[dict] = None,
                  max_router_steps: int = 6, analysis_max_steps: int = 8,
-                 exec_timeout: int = 120, use_router_llm: bool = True):
+                 exec_timeout: int = 120, use_router_llm: bool = True,
+                 on_step=None):
         self.agents = agents
         self.kernel = kernel
         self.base_url = base_url
@@ -32,6 +33,7 @@ class Orchestrator:
         self.analysis_max_steps = analysis_max_steps
         self.exec_timeout = exec_timeout
         self.use_router_llm = use_router_llm
+        self.on_step = on_step  # 스텝을 실시간으로 흘려보내는 콜백(스트리밍용)
 
         self.steps: list[dict] = []
         self.conv = {"router": None, "analysis": None, "sql": None, "html": None}
@@ -44,6 +46,8 @@ class Orchestrator:
     # ------------------------------------------------------------------
     def _emit(self, ev: dict):
         self.steps.append(ev)
+        if self.on_step:
+            self.on_step(ev)
 
     def _state_summary(self) -> str:
         s = self.state

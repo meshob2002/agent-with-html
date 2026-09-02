@@ -314,11 +314,19 @@ class MockAgent:
         )
 
     def _html(self, query: str) -> str:
+        # echarts.min.js 를 외부 참조 → 앱이 로컬 파일을 인라인 치환하는 경로를 태운다.
         return (
             "```html\n"
             "<!doctype html><html lang=ko><head><meta charset=utf-8>"
-            "<title>목 보고서</title></head><body>"
-            "<h1>분석 보고서 (mock)</h1><pre>" + query.replace("<", "&lt;")[:1500] + "</pre>"
+            "<title>목 보고서</title>"
+            '<script src="echarts.min.js"></script>'
+            "</head><body>"
+            "<h1>분석 보고서 (mock)</h1>"
+            '<div id="c" style="width:600px;height:300px"></div>'
+            "<pre>" + query.replace("<", "&lt;")[:1500] + "</pre>"
+            "<script>if(window.echarts){var ch=echarts.init(document.getElementById('c'));"
+            "ch.setOption({xAxis:{type:'category',data:['A','B','C']},yAxis:{},"
+            "series:[{type:'bar',data:[3,1,2]}]});}</script>"
             "</body></html>\n```"
         )
 
