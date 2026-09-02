@@ -143,6 +143,7 @@ C:\Users\OK\miniconda3\python.exe app.py
 - `orchestrator.py` — 라우터(슈퍼바이저) 중심 파이프라인 제어 + 규칙 기반 폴백
 - `analyzer.py` — 링크 추출 · CSV 파싱(한글 인코딩 자동) · pandas 분석 · ECharts/CSS 보고서(빠른 분석용)
 - `templates/index.html` · `static/{style.css,app.js}` — 웹 UI
+- `prompts/` — 4개 에이전트에 등록할 시스템 프롬프트(라우팅/분석/SQL/HTML)
 - `reports/` — 생성된 보고서 저장 폴더 (기본 git 제외)
 
 ## 보고서에 담기는 내용
