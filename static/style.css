@@ -67,6 +67,19 @@ code { background:var(--line); padding:1px 5px; border-radius:5px; }
 .badge { font-size:10px; padding:1px 6px; border-radius:20px; background:var(--brand); color:#fff; margin-left:4px; }
 .dim { color:var(--muted); font-size:12px; }
 
+/* 대화 세션 */
+.conv-head { display:flex; align-items:baseline; gap:12px; margin-bottom:10px; }
+.conv-list { display:flex; flex-direction:column; gap:8px; max-height:320px; overflow:auto; }
+.conv-row { display:flex; align-items:center; gap:10px; border:1px solid var(--line);
+  border-radius:10px; padding:9px 12px; background:var(--card); }
+.conv-row.active { border-color:var(--brand); box-shadow:0 0 0 1px var(--brand) inset; }
+.conv-main { flex:1; cursor:pointer; min-width:0; }
+.conv-main b { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.conv-row .del { border:none; background:transparent; font-size:15px; }
+.convbar { display:flex; align-items:center; gap:8px; margin-bottom:8px; font-size:12px; }
+.convbar code { background:var(--line); padding:1px 6px; border-radius:5px; font-size:11px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:280px; }
+
 /* 에이전트 스텝 */
 .msg.step { border-left-width:3px; }
 .msg.step.a-router   { border-left-color:#8e44ad; }

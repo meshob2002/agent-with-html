@@ -43,6 +43,29 @@ UI는 Streamlit 대신 **HTML + JavaScript + Python(Flask)** 로 새로 구성�
 - 라우터 응답이 없거나 파싱 실패하면 **규칙 기반 기본 계획**으로 폴백 (안전망)
 - HTML Agent 결과가 echarts 를 외부 참조하면 로컬 echarts 를 **인라인 치환**(오프라인 단독 실행)
 
+## 멀티턴 · 대화 세션 (SQLite)
+
+`conversation_id` 를 키로 대화 세션을 **SQLite**(`data/sessions.db`)에 저장한다.
+
+- **멀티턴**: 같은 `conversation_id` 로 이어서 요청하면, 4개 에이전트의 `conversationId` 를
+  이어받아 문맥을 유지하고, 그 대화 전용 **Jupyter 커널**의 변수(`df` 등)도 유지된다.
+- **기록/복원**: 각 턴의 사용자 요청·에이전트 스텝·생성 보고서를 저장한다. UI 의 **💬 대화목록**
+  에서 과거 대화를 클릭하면 전체 대화가 복원되고, 이어서 입력하면 같은 세션으로 계속된다.
+- **새 대화**: **🆕 새 대화** 버튼으로 세션을 리셋한다(과거 대화는 목록에 남는다).
+- 저장 위치 `data/` 는 git 에서 제외된다.
+
+### 스트리밍 응답 (`/api/orchestrate`, NDJSON)
+
+에이전트 결과가 나오는 즉시 한 줄씩 전송된다(`application/x-ndjson`). 줄별 JSON 예:
+
+```json
+{"type": "conversation", "conversation_id": "c-ab12…", "is_new": true}
+{"type": "step", "step": {"agent": "router", "kind": "decision", "text": "다음 행동: analysis", "data": {"action": "analysis", "reason": "…"}}}
+{"type": "step", "step": {"agent": "analysis", "kind": "message", "text": "```python\n…\n```"}}
+{"type": "step", "step": {"agent": "kernel", "kind": "exec", "text": "[코드 실행 결과] status: ok …"}}
+{"type": "done", "report_url": "/reports/<id>.html", "conversation_id": "c-ab12…", "mock": false}
+```
+
 ## 목 모드 (사내망 없이 개발/데모)
 
 4개 API·커널에 접속할 수 없어도 전체 흐름을 시연할 수 있다. UI 의 **목 모드** 체크(기본 ON) 또는
@@ -127,7 +150,10 @@ C:\Users\OK\miniconda3\python.exe app.py
 | 메서드 | 경로 | 설명 |
 |---|---|---|
 | GET | `/` | 웹 UI |
-| POST | `/api/orchestrate` | **멀티에이전트 파이프라인**(라우터→분석/SQL→HTML). multipart: `request`, `file`(선택), `need_sql`, `mock`, `config` → `{steps[], report_url}` |
+| POST | `/api/orchestrate` | **멀티에이전트 파이프라인**(라우터→분석/SQL→HTML). multipart: `request`, `file`(선택), `need_sql`, `mock`, `conversation_id`(선택), `config` → NDJSON 스트림 |
+| GET | `/api/conversations` | 대화 목록(최근순) |
+| GET | `/api/conversations/<cid>` | 대화 전체 기록(턴+스텝+보고서) 복원용 |
+| POST | `/api/conversations/<cid>/delete` | 대화 삭제 + 해당 커널 종료 |
 | POST | `/api/upload` | 빠른 분석: 로컬 CSV 업로드 → pandas 분석 보고서 (에이전트 없이) |
 | POST | `/api/query` | (레거시) 단일 Agent 호출 → `{message, conversation_id, links[]}` |
 | POST | `/api/analyze` | (레거시) `{url}` CSV 다운로드·분석 → 보고서 |
@@ -142,9 +168,11 @@ C:\Users\OK\miniconda3\python.exe app.py
 - `agents.py` — 4개 에이전트 클라이언트 묶음 · 각 에이전트 실행 로직 · 라우터 파싱 · 목 에이전트
 - `orchestrator.py` — 라우터(슈퍼바이저) 중심 파이프라인 제어 + 규칙 기반 폴백
 - `analyzer.py` — 링크 추출 · CSV 파싱(한글 인코딩 자동) · pandas 분석 · ECharts/CSS 보고서(빠른 분석용)
+- `session_store.py` — 대화 세션 저장소(SQLite): conversation_id 키, 턴·스텝·에이전트 conversationId
 - `templates/index.html` · `static/{style.css,app.js}` — 웹 UI
 - `prompts/` — 4개 에이전트에 등록할 시스템 프롬프트(라우팅/분석/SQL/HTML)
 - `reports/` — 생성된 보고서 저장 폴더 (기본 git 제외)
+- `data/` — 대화 세션 SQLite DB (git 제외)
 
 ## 보고서에 담기는 내용
 

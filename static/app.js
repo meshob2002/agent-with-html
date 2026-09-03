@@ -9,6 +9,9 @@
 
   var els = {
     cfgToggle: $("cfgToggle"), cfgPanel: $("cfgPanel"),
+    convToggle: $("convToggle"), newConvBtn: $("newConvBtn"),
+    convPanel: $("convPanel"), convList: $("convList"),
+    convBar: $("convBar"), convId: $("convId"), convTurns: $("convTurns"),
     base_url: $("base_url"), token: $("token"), project_key: $("project_key"),
     app_router: $("app_router"), app_analysis: $("app_analysis"),
     app_sql: $("app_sql"), app_html: $("app_html"), headers_json: $("headers_json"),
@@ -17,6 +20,9 @@
     frame: $("reportFrame"), empty: $("reportEmpty"),
     actions: $("reportActions"), openReport: $("openReport"), dlReport: $("dlReport"),
   };
+
+  var conversationId = null;   // 현재 대화 세션 키 (멀티턴)
+  var turnCount = 0;
 
   var CFG_KEYS = ["base_url", "token", "project_key", "app_router", "app_analysis",
                   "app_sql", "app_html", "headers_json"];
@@ -139,14 +145,19 @@
     fd.append("need_sql", els.needSql.checked ? "true" : "false");
     fd.append("mock", mock ? "true" : "false");
     fd.append("config", JSON.stringify(cfg));
+    if (conversationId) fd.append("conversation_id", conversationId);
     if (file) fd.append("file", file);
 
     // NDJSON 스트리밍 수신: 한 줄에 이벤트 하나씩 도착하는 즉시 렌더
     function handleEvent(obj) {
-      if (obj.type === "step") {
+      if (obj.type === "conversation") {
+        turnCount += 1;
+        setConversation(obj.conversation_id);
+      } else if (obj.type === "step") {
         st.remove();
         renderStep(obj.step);
       } else if (obj.type === "done") {
+        if (obj.conversation_id) setConversation(obj.conversation_id);
         if (obj.report_url) {
           var id = obj.report_url.split("/").pop().replace(".html", "").slice(0, 8);
           addMsg("step a-html", "📄 완료", "HTML 보고서를 오른쪽에 표시했습니다.");
@@ -162,7 +173,12 @@
     fetch("/api/orchestrate", { method: "POST", body: fd })
       .then(function (r) {
         if (!r.ok || !r.body) {
-          return r.json().then(function (j) { throw new Error(j.error || ("HTTP " + r.status)); });
+          // 에러 응답이 JSON 이 아닐 수도(500 HTML) → 텍스트로 안전하게 처리
+          return r.text().then(function (t) {
+            var msg = t;
+            try { msg = JSON.parse(t).error || t; } catch (e) {}
+            throw new Error("서버 오류(HTTP " + r.status + "): " + String(msg).slice(0, 300));
+          });
         }
         var reader = r.body.getReader();
         var decoder = new TextDecoder();
@@ -184,7 +200,10 @@
         return pump();
       })
       .catch(function (e) { st.remove(); addMsg("error", "요청 실패", esc(e.message)); })
-      .finally(function () { els.runBtn.disabled = false; });
+      .finally(function () {
+        els.runBtn.disabled = false;
+        els.fileInput.value = "";  // 팔로우업 턴이 같은 파일을 다시 올리지 않도록 비움
+      });
   }
 
   // ---- 빠른 분석 (에이전트 없이 pandas) ----
@@ -208,8 +227,87 @@
       .catch(function (e) { st.remove(); addMsg("error", "빠른 분석 실패", esc(e.message)); });
   }
 
+  // ---- 대화 세션 관리 ----
+  function setConversation(cid) {
+    conversationId = cid || null;
+    if (conversationId) {
+      els.convId.textContent = conversationId;
+      els.convTurns.textContent = turnCount ? "· " + turnCount + "턴" : "";
+      els.convBar.classList.remove("hidden");
+    } else {
+      els.convBar.classList.add("hidden");
+    }
+  }
+  function newConversation() {
+    conversationId = null; turnCount = 0;
+    els.log.innerHTML = "";
+    els.frame.src = "about:blank"; els.frame.classList.add("hidden");
+    els.empty.classList.remove("hidden"); els.actions.classList.add("hidden");
+    setConversation(null);
+    addMsg("status", "안내", "새 대화를 시작합니다. (이전 대화는 대화목록에서 다시 열 수 있어요)");
+  }
+
+  function refreshConvList() {
+    fetch("/api/conversations").then(function (r) { return r.json(); }).then(function (res) {
+      els.convList.innerHTML = "";
+      var convs = res.conversations || [];
+      if (!convs.length) { els.convList.innerHTML = '<div class="dim">저장된 대화가 없습니다.</div>'; return; }
+      convs.forEach(function (c) {
+        var row = document.createElement("div");
+        row.className = "conv-row" + (c.id === conversationId ? " active" : "");
+        var when = new Date((c.updated_at || 0) * 1000).toLocaleString("ko-KR");
+        row.innerHTML =
+          '<div class="conv-main"><b>' + esc(c.title || "(제목 없음)") + "</b>" +
+          '<div class="dim">' + c.turns + "턴 · " + esc(when) + "</div></div>" +
+          '<button class="mini del" title="삭제">🗑️</button>';
+        row.querySelector(".conv-main").onclick = function () { loadConversation(c.id); };
+        row.querySelector(".del").onclick = function (e) {
+          e.stopPropagation();
+          fetch("/api/conversations/" + encodeURIComponent(c.id) + "/delete", { method: "POST" })
+            .then(function () { if (c.id === conversationId) newConversation(); refreshConvList(); });
+        };
+        els.convList.appendChild(row);
+      });
+    });
+  }
+
+  function loadConversation(cid) {
+    fetch("/api/conversations/" + encodeURIComponent(cid))
+      .then(function (r) { return r.json().then(function (j) {
+        if (!r.ok) throw new Error(j.error || "로드 실패"); return j; }); })
+      .then(function (conv) {
+        els.log.innerHTML = "";
+        turnCount = conv.turns.length;
+        setConversation(conv.id);
+        var lastReport = null;
+        conv.turns.forEach(function (t) {
+          addMsg("user", "요청 (턴 " + t.seq + ")", esc(t.request || "(CSV 분석)") +
+            (t.mock ? ' <span class="badge">MOCK</span>' : "") +
+            (t.need_sql ? ' <span class="badge">SQL</span>' : ""));
+          (t.events || []).forEach(renderStep);
+          if (t.report_url) {
+            lastReport = t.report_url;
+            var id = t.report_url.split("/").pop().replace(".html", "").slice(0, 8);
+            var m = addMsg("step a-html", "📄 보고서", "");
+            var a = document.createElement("a");
+            a.href = t.report_url; a.target = "_blank"; a.textContent = "보고서 열기 (" + id + ")";
+            m.appendChild(a);
+          }
+        });
+        if (lastReport) showReport(lastReport, "load");
+        els.convPanel.classList.add("hidden");
+        addMsg("status", "안내", "대화를 불러왔습니다. 이어서 입력하면 같은 세션으로 계속됩니다.");
+      })
+      .catch(function (e) { addMsg("error", "대화 로드 실패", esc(e.message)); });
+  }
+
   // ---- 이벤트 배선 ----
   els.cfgToggle.onclick = function () { els.cfgPanel.classList.toggle("hidden"); };
+  els.convToggle.onclick = function () {
+    els.convPanel.classList.toggle("hidden");
+    if (!els.convPanel.classList.contains("hidden")) refreshConvList();
+  };
+  els.newConvBtn.onclick = newConversation;
   els.runBtn.onclick = run;
   els.quickBtn.onclick = quickAnalyze;
   els.query.addEventListener("keydown", function (e) {

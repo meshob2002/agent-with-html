@@ -51,23 +51,30 @@ DEFAULT_APP_IDS = {
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 REPORTS_DIR = os.path.join(BASE_DIR, "reports")
+DATA_DIR = os.path.join(BASE_DIR, "data")
 os.makedirs(REPORTS_DIR, exist_ok=True)
+os.makedirs(DATA_DIR, exist_ok=True)
 
 # ECharts 로컬 파일 탐지: 시작 파일(app.py)과 같은 위치를 최우선, static/ 도 확인.
 # 파일이 있으면 대시보드를 ECharts 로, 없으면 CSS 막대로 폴백한다.
 ECHARTS_PATH = find_echarts(BASE_DIR, os.path.join(BASE_DIR, "static"))
 
-# 상태 유지 Jupyter 커널(요청 간 재사용). 분석 에이전트가 사용.
-_KERNEL = None
+# 대화 세션 저장소(SQLite): conversation_id 를 키로 멀티턴 상태/기록 보관
+from session_store import ConversationStore
+STORE = ConversationStore(os.path.join(DATA_DIR, "sessions.db"))
+
+# 대화별 상태 유지 Jupyter 커널. 같은 conversation 안에서는 변수(df 등)가 유지된다.
+_KERNELS: dict = {}
 
 
-def get_kernel():
-    """상태 유지 커널을 지연 생성(요청 간 변수 유지). jupyter 미설치 시 명확한 에러."""
-    global _KERNEL
-    if _KERNEL is None:
+def get_kernel(conversation_id: str = "_default"):
+    """대화별 상태 유지 커널을 지연 생성. jupyter 미설치 시 명확한 에러."""
+    k = _KERNELS.get(conversation_id)
+    if k is None:
         from kernel_manager import JupyterKernelSession  # 지연 임포트
-        _KERNEL = JupyterKernelSession(kernel_name="python3")
-    return _KERNEL
+        k = JupyterKernelSession(kernel_name="python3")
+        _KERNELS[conversation_id] = k
+    return k
 
 
 app = Flask(__name__)
@@ -265,9 +272,12 @@ def api_orchestrate():
     from agents import build_agents, build_mock_agents
     from orchestrator import Orchestrator
 
+    import uuid as _uuid
+
     req_text = (request.form.get("request") or "").strip()
     need_sql = (request.form.get("need_sql") or "false").lower() == "true"
     use_mock = (request.form.get("mock") or "false").lower() == "true"
+    conversation_id = (request.form.get("conversation_id") or "").strip()
     try:
         cfg = cfg_from_request({"config": json.loads(request.form.get("config") or "{}")})
     except json.JSONDecodeError as e:
@@ -290,6 +300,15 @@ def api_orchestrate():
 
     if not req_text and not csv_path:
         return jsonify({"error": "요청 텍스트나 CSV 파일 중 하나는 필요합니다."}), 400
+
+    # 대화 세션: 없으면 새로 만들고, 있으면 이어서(멀티턴)
+    is_new_conv = not conversation_id
+    if is_new_conv:
+        conversation_id = "c-" + _uuid.uuid4().hex
+    title = req_text or (f.filename if f and f.filename else "새 대화")
+    STORE.ensure_conversation(conversation_id, title=title)
+    STORE.set_title_if_empty(conversation_id, title)
+    agent_convs = STORE.get_agent_convs(conversation_id)
 
     # 에이전트 구성 (목 or 실제)
     if use_mock:
@@ -322,9 +341,9 @@ def api_orchestrate():
     q: "queue.Queue" = queue.Queue()
     holder: dict = {}
 
-    orch = Orchestrator(agents, get_kernel(), base_url=orch_base_url,
+    orch = Orchestrator(agents, get_kernel(conversation_id), base_url=orch_base_url,
                         download_headers=dl_headers, use_router_llm=True,
-                        on_step=lambda ev: q.put(ev))
+                        on_step=lambda ev: q.put(ev), agent_convs=agent_convs)
 
     def worker():
         try:
@@ -336,6 +355,10 @@ def api_orchestrate():
             q.put(None)  # 종료 신호
 
     def generate():
+        # 새 대화면 conversation_id 를 먼저 알려줘 프론트가 이후 턴에 이어붙이게 함
+        yield json.dumps({"type": "conversation", "conversation_id": conversation_id,
+                          "is_new": is_new_conv}, ensure_ascii=False) + "\n"
+
         threading.Thread(target=worker, daemon=True).start()
         while True:
             ev = q.get()
@@ -357,13 +380,52 @@ def api_orchestrate():
                 yield json.dumps({"type": "error", "error": f"보고서 저장 실패: {e}"},
                                  ensure_ascii=False) + "\n"
                 return
-        yield json.dumps({"type": "done", "report_url": report_url, "mock": use_mock},
-                         ensure_ascii=False) + "\n"
+
+        # 멀티턴 상태/기록 저장: 에이전트 conversationId + 이번 턴 + 스텝
+        try:
+            turn_seq = STORE.next_turn_seq(conversation_id)
+            STORE.add_turn(conversation_id, turn_seq, req_text, need_sql, use_mock, report_url)
+            STORE.add_events(conversation_id, turn_seq, orch.steps)
+            STORE.set_agent_convs(conversation_id, orch.conv)
+        except Exception as e:  # noqa: BLE001
+            yield json.dumps({"type": "error", "error": f"세션 저장 실패: {e}"},
+                             ensure_ascii=False) + "\n"
+
+        yield json.dumps({"type": "done", "report_url": report_url, "mock": use_mock,
+                          "conversation_id": conversation_id}, ensure_ascii=False) + "\n"
 
     resp = app.response_class(generate(), mimetype="application/x-ndjson")
     resp.headers["Cache-Control"] = "no-cache"
     resp.headers["X-Accel-Buffering"] = "no"  # 프록시 버퍼링 방지
     return resp
+
+
+@app.get("/api/conversations")
+def api_conversations():
+    """대화 목록 (최근순)."""
+    return jsonify({"conversations": STORE.list_conversations(limit=100)})
+
+
+@app.get("/api/conversations/<cid>")
+def api_conversation_load(cid):
+    """대화 전체 기록(턴+스텝+보고서) 로드 → 화면 복원용."""
+    conv = STORE.load_conversation(cid)
+    if conv is None:
+        return jsonify({"error": "대화를 찾을 수 없습니다."}), 404
+    return jsonify(conv)
+
+
+@app.post("/api/conversations/<cid>/delete")
+def api_conversation_delete(cid):
+    """대화 삭제 + 해당 대화의 커널 종료."""
+    STORE.delete_conversation(cid)
+    k = _KERNELS.pop(cid, None)
+    if k is not None:
+        try:
+            k.shutdown()
+        except Exception:
+            pass
+    return jsonify({"ok": True})
 
 
 @app.route("/mock/sql.csv")

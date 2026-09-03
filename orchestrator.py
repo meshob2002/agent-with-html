@@ -24,7 +24,7 @@ class Orchestrator:
                  download_headers: Optional[dict] = None,
                  max_router_steps: int = 6, analysis_max_steps: int = 8,
                  exec_timeout: int = 120, use_router_llm: bool = True,
-                 on_step=None):
+                 on_step=None, agent_convs: Optional[dict] = None):
         self.agents = agents
         self.kernel = kernel
         self.base_url = base_url
@@ -36,7 +36,9 @@ class Orchestrator:
         self.on_step = on_step  # 스텝을 실시간으로 흘려보내는 콜백(스트리밍용)
 
         self.steps: list[dict] = []
-        self.conv = {"router": None, "analysis": None, "sql": None, "html": None}
+        # 멀티턴: 이전 턴의 에이전트별 conversationId 를 이어받아 문맥 유지
+        seed = agent_convs or {}
+        self.conv = {r: seed.get(r) for r in ("router", "analysis", "sql", "html")}
         self.state = {
             "has_csv": False, "need_sql": False,
             "analysis_done": False, "sql_done": False, "sql_csv_ok": False, "html_done": False,

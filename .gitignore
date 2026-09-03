@@ -10,6 +10,9 @@ env/
 reports/*
 !reports/.gitkeep
 
+# 대화 세션 DB (SQLite)
+data/
+
 # ECharts 라이브러리 (내부망에서 각자 배치 — 저장소에는 커밋하지 않음)
 echarts.min.js
 echart.min.js

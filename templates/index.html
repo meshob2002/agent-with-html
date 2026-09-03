@@ -15,9 +15,20 @@
     {% else %}
       <span class="chip" title="app.py 옆에 echarts.min.js 를 두면 대시보드 모드">📊 기본 차트</span>
     {% endif %}
+    <button id="convToggle" class="ghost">💬 대화목록</button>
+    <button id="newConvBtn" class="ghost">🆕 새 대화</button>
     <button id="cfgToggle" class="ghost">⚙️ 설정</button>
   </div>
 </header>
+
+<!-- 대화 목록 패널 -->
+<section id="convPanel" class="panel hidden">
+  <div class="conv-head">
+    <strong>💬 저장된 대화</strong>
+    <span class="dim" id="convHint">conversation_id 로 저장됩니다. 클릭하면 불러옵니다.</span>
+  </div>
+  <div id="convList" class="conv-list"></div>
+</section>
 
 <!-- 설정 패널 -->
 <section id="cfgPanel" class="panel hidden">
@@ -58,6 +69,11 @@
   <!-- 왼쪽: 요청/파이프라인 로그 -->
   <div class="col left">
     <div class="askbox">
+      <div id="convBar" class="convbar hidden">
+        <span class="dim">🧵 이어지는 대화</span>
+        <code id="convId"></code>
+        <span id="convTurns" class="dim"></span>
+      </div>
       <textarea id="query" rows="3" placeholder="예) 2024년 3분기 신용대출 실행 내역을 분석해서 보고서로 만들어줘"></textarea>
       <div class="row">
         <button id="runBtn" class="primary">▶ 파이프라인 실행</button>
